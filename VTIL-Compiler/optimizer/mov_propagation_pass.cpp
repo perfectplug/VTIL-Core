@@ -27,6 +27,7 @@
 //
 #include "mov_propagation_pass.hpp"
 #include "../common/auxiliaries.hpp"
+#include <cstdlib>
 
 namespace vtil::optimizer
 {
@@ -133,11 +134,24 @@ namespace vtil::optimizer
 				// Declare bypass point and trace it.
 				//
 				mtracer.bypass = it;
-				auto res = ( xblock && op.reg().is_global() ) ? mtracer.rtrace_p( { it, op.reg() } ) : mtracer.trace_p( { it, op.reg() } );
+				const bool crossblock = xblock && op.reg().is_global();
+				auto res = crossblock ? mtracer.rtrace_p( { it, op.reg() } ) : mtracer.trace_p( { it, op.reg() } );
 
 				// Skip if invalid result or if we resolved it into an expression.
 				//
 				if ( !res || res->is_expression() )
+					continue;
+
+				// WMP_LOOPAWARE_MOV (opt-in): a CROSS-BLOCK global register read that
+				// resolves to a CONSTANT is the loop-unaware forwarding case — the
+				// tracer followed the CFG (incl. a loop back-edge) to a single
+				// dominating pre-loop definition, folding a loop-carried value to its
+				// entry constant.  Skip that fold so loop-carried per-def VRs stay
+				// symbolic (ex02 operand-stack / counter).  Default OFF -> byte-
+				// identical for every existing sample.
+				static const bool wmp_loopaware_mov =
+					std::getenv( "WMP_LOOPAWARE_MOV" ) != nullptr;
+				if ( wmp_loopaware_mov && crossblock && res->is_constant() )
 					continue;
 
 				// If constant:
