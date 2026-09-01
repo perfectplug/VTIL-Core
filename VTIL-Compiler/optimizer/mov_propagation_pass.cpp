@@ -151,7 +151,14 @@ namespace vtil::optimizer
 				// identical for every existing sample.
 				static const bool wmp_loopaware_mov =
 					std::getenv( "WMP_LOOPAWARE_MOV" ) != nullptr;
-				if ( wmp_loopaware_mov && crossblock && res->is_constant() )
+				// Narrow to VIRTUAL registers only: the loop-carried per-def / VR-
+				// promoted cells (operand stack, counter) are virtual, whereas the
+				// loop CONTROL (physical regs, immediates) must keep folding so the
+				// loop still terminates.  Skipping the fold for a virtual reg keeps
+				// its loop-carried value symbolic without breaking the counter's
+				// increment/bound (those are physical/immediate).
+				if ( wmp_loopaware_mov && crossblock && res->is_constant() &&
+					 op.reg().is_virtual() )
 					continue;
 
 				// If constant:
