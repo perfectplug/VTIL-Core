@@ -29,9 +29,15 @@
 #include <vtil/arch>
 #include <shared_mutex>
 #include "../common/interface.hpp"
+#include <set>
+#include <cstdint>
 
 namespace vtil::optimizer
 {
+	// WMP_LOOPAWARE_MOV allowlist of loop-carried virtual-register local_ids
+	// (populated by the wmpdevrit lift before apply_all).  See the .cpp.
+	extern std::set<std::uint64_t> wmp_loopcarried_vrs;
+
 	// Attempts to forward any movs to the actual uses of them where possible.
 	//
 	struct mov_propagation_pass : pass_interface<>
