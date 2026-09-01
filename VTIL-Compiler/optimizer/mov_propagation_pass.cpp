@@ -28,6 +28,17 @@
 #include "mov_propagation_pass.hpp"
 #include "../common/auxiliaries.hpp"
 #include <cstdlib>
+#include <set>
+
+namespace vtil::optimizer
+{
+	// WMP_LOOPAWARE_MOV allowlist: virtual-register local_ids that the wmpdevrit
+	// lift marked LOOP-CARRIED (its LCVR single-VR promotions of reach_lc cells:
+	// ex02 v0/v1/sum/i).  When the flag is set, mov_propagation must NOT forward a
+	// cross-block read of one of these to its dominating pre-loop def, or the loop
+	// reads the INIT value every iteration.  Populated by the lift before apply_all.
+	std::set<std::uint64_t> wmp_loopcarried_vrs;
+}
 
 namespace vtil::optimizer
 {
@@ -157,8 +168,13 @@ namespace vtil::optimizer
 				// loop still terminates.  Skipping the fold for a virtual reg keeps
 				// its loop-carried value symbolic without breaking the counter's
 				// increment/bound (those are physical/immediate).
-				if ( wmp_loopaware_mov && crossblock && res->is_constant() &&
-					 op.reg().is_virtual() )
+				// Skip forwarding a cross-block read ONLY for the lift-marked
+				// loop-carried VRs (LCVR): forwarding their header read to the
+				// dominating pre-loop def (loop-unaware) makes the loop read the INIT
+				// value every iteration -> counter never advances.  Restricting to the
+				// allowlist keeps legitimate cross-block virtual forwarding intact.
+				if ( wmp_loopaware_mov && crossblock && op.reg().is_virtual() &&
+					 wmp_loopcarried_vrs.count( op.reg().local_id ) )
 					continue;
 
 				// If constant:
