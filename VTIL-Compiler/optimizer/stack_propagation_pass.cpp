@@ -30,6 +30,13 @@
 
 namespace vtil::optimizer
 {
+	// WMP_LOOPAWARE_STACK allowlist of loop-carried operand-stack REG_SP offsets.
+	// A cross-block stack load at one of these offsets keeps its memory round-trip
+	// (skips the loop-unaware rtrace forward) so a loop-carried value threads across
+	// the back-edge instead of collapsing to its pre-loop store.  Populated by the
+	// wmpdevrit vmp3 lift before apply_all.  Empty => default behaviour unchanged.
+	std::set<std::int64_t> wmp_loopcarried_stackslots;
+
 	// Wrap cached tracer with a filter rejecting queries of registers and specializing recursive tracer.
 	//
 	struct lazy_tracer : cached_tracer
@@ -99,6 +106,21 @@ namespace vtil::optimizer
 			//
 			if ( it->base == &ins::ldd && it->memory_location().first.is_stack_pointer() )
 			{
+				// WMP_LOOPAWARE_STACK: for a cross-block load of a loop-carried operand-
+				// stack slot, do NOT rtrace-forward it -- that resolves the value's memory
+				// round-trip to the pre-loop store (loop-unaware), freezing the recurrence.
+				// Leaving the ldd keeps the value memory-resident so the intra-block store
+				// + the register-side loop-carried guard thread it across the back-edge.
+				static const bool wmp_loopaware_stack =
+					std::getenv( "WMP_LOOPAWARE_STACK" ) != nullptr;
+				if ( wmp_loopaware_stack && xblock && std::getenv( "WMP_STACKPROP_DBG" ) )
+					std::fprintf( stderr, "[stackprop] xblock ldd off=%lld guarded=%d\n",
+						(long long) it->memory_location().second,
+						(int) wmp_loopcarried_stackslots.count( it->memory_location().second ) );
+				if ( wmp_loopaware_stack && xblock && !wmp_loopcarried_stackslots.empty() &&
+					 wmp_loopcarried_stackslots.count( it->memory_location().second ) )
+					continue;
+
 				auto resize_and_pack = [ & ] ( symbolic::expression::reference& exp )
 				{
 					exp = symbolic::variable::pack_all( exp.resize( it->operands[ 0 ].bit_count() ) );

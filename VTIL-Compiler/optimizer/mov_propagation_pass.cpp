@@ -174,6 +174,12 @@ namespace vtil::optimizer
 				// value every iteration -> counter never advances.  Restricting to the
 				// allowlist keeps legitimate cross-block virtual forwarding intact.
 				if ( wmp_loopaware_mov && crossblock && op.reg().is_virtual() &&
+					 std::getenv( "WMP_MOVPROP_DBG" ) )
+					std::fprintf( stderr, "[movprop] xblock virt read local_id=0x%llx inset=%d res_var=%d\n",
+						(unsigned long long) op.reg().local_id,
+						(int) wmp_loopcarried_vrs.count( op.reg().local_id ),
+						(int) ( res && res->is_variable() ) );
+				if ( wmp_loopaware_mov && crossblock && op.reg().is_virtual() &&
 					 wmp_loopcarried_vrs.count( op.reg().local_id ) )
 					continue;
 

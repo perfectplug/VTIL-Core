@@ -28,11 +28,21 @@
 #pragma once
 #include <vtil/arch>
 #include <unordered_map>
+#include <set>
+#include <cstdint>
 #include "../common/interface.hpp"
 
 namespace vtil::optimizer
 {
-	// Attempts to resolve all loads from stack where the value can be 
+	// WMP_LOOPAWARE_STACK allowlist of loop-carried operand-stack REG_SP offsets
+	// (populated by the wmpdevrit lift before apply_all).  A cross-block (xblock)
+	// stack load at one of these offsets is NOT forwarded via rtrace -- forwarding
+	// it resolves the loop-carried value's memory round-trip to its pre-loop store
+	// (loop-unaware) and freezes the recurrence to a constant.  Mirrors the
+	// register-side wmp_loopcarried_vrs guard in mov_propagation.  See the .cpp.
+	extern std::set<std::int64_t> wmp_loopcarried_stackslots;
+
+	// Attempts to resolve all loads from stack where the value can be
 	// determined during compile time.
 	//
 	struct stack_propagation_pass : pass_interface<>
