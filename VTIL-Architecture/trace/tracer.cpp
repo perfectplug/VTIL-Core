@@ -348,6 +348,27 @@ namespace vtil
 				//
 				bool potential_loop = lookup.at.block->owner->is_looping( lookup.at.block );
 
+				// WMP_LOOPAWARE_RTRACE (opt-in, default off -> byte-identical): a MEMORY or
+				// VIRTUAL-register variable read cross-block inside a loop is branch-DEPENDENT
+				// (it is a phi of the loop-entry value and the back-edge/body value).  The
+				// default tracer folds it to a single dominating PRE-LOOP definition (loop-
+				// unaware), which freezes loop-carried values (counter/accumulator/operand-
+				// stack cells) to their entry constant -> dead loop.  Returning the variable
+				// as branch-dependant keeps it symbolic so the recurrence survives apply_all.
+				// Loop CONTROL (physical regs, immediates) is NOT affected -> it keeps folding
+				// so the loop still terminates.  Restricted to mem/virtual to match the
+				// register-side wmp_loopcarried_vrs guard.
+				static const bool wmp_loopaware_rtrace =
+					std::getenv( "WMP_LOOPAWARE_RTRACE" ) != nullptr;
+				if ( wmp_loopaware_rtrace && potential_loop &&
+					 ( lookup.is_memory() ||
+					   ( lookup.is_register() && lookup.reg().is_virtual() ) ) )
+				{
+					symbolic::variable bd = lookup;
+					bd.is_branch_dependant = true;
+					return bd.to_expression().simplify();
+				}
+
 				// If block does not touch our variable, skip the logic.
 				//
 				/*if ( default_result->is_variable() &&
