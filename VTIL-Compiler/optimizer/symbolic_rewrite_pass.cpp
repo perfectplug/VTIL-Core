@@ -26,7 +26,11 @@
 // POSSIBILITY OF SUCH DAMAGE.        
 //
 #include "symbolic_rewrite_pass.hpp"
+#include <cstdlib>
+#include <cstdio>
 #include "../common/auxiliaries.hpp"
+#include "mov_propagation_pass.hpp"   // WMP: vtil::optimizer::wmp_loopcarried_vrs
+#include "stack_propagation_pass.hpp" // WMP: vtil::optimizer::wmp_loopcarried_stackslots
 
 namespace vtil::optimizer
 {
@@ -34,7 +38,12 @@ namespace vtil::optimizer
 	//
 	size_t isymbolic_rewrite_pass::pass( basic_block* blk, bool xblock )
 	{
-		// Create an instrumented symbolic virtual machine and hook execution to exit at 
+		// WMP_SKIP_SYMREWRITE (gated diagnostic, default off): skip symbolic
+		// re-emission to bisect which apply_all pass collapses a lift-marked
+		// loop-carried branch-dependent read.  Default off -> byte-identical.
+		if ( std::getenv( "WMP_SKIP_SYMREWRITE" ) )
+			return 0;
+		// Create an instrumented symbolic virtual machine and hook execution to exit at
 		// instructions that cannot be executed out-of-order.
 		//
 		lambda_vm<symbolic_vm> vm;
@@ -96,6 +105,17 @@ namespace vtil::optimizer
 				register_desc k = { pair.first, size };
 				auto v = vm.read_register( k ).simplify();
 
+				// WMP_BAKEWATCH (gated diagnostic, default off): report when symbolic
+				// re-emission folds a lift-marked loop-carried VR to a CONSTANT -- the
+				// suspected locus of ex02's v0/v1/k0/k2 trace-seed bake (UPDATE 264).
+				if ( std::getenv( "WMP_BAKEWATCH" ) && k.is_virtual() &&
+				     wmp_loopcarried_vrs.count( (std::uint64_t) k.local_id ) &&
+				     v->is_constant() )
+					fprintf( stderr,
+						"[bakewatch] symrw loopcarried VR id=0x%llx -> const 0x%llx\n",
+						(unsigned long long) k.local_id,
+						(unsigned long long) v->get<std::uint64_t>().value_or( 0 ) );
+
 				// If value is unchanged, skip.
 				//
 				symbolic::expression v0 = symbolic::CTX( vm.reference_iterator )[ k ];
@@ -104,7 +124,24 @@ namespace vtil::optimizer
 
 				// If register value is not used after this instruction, skip from emitted state.
 				//
-				if ( !aux::is_used( { std::prev( limit ), k }, false, nullptr ) )
+				// WMP_LOOPAWARE_SYMREWRITE (opt-in, default off -> byte-identical): a
+				// lift-marked loop-carried virtual register's writeback whose ONLY consumer
+				// is the cross-block self-loop back-edge header read has no within-block
+				// forward reader, so aux::is_used(rec=false) (path-restricted, no tracer)
+				// returns false ONLY for GLOBAL regs -> a local/lane VR store is dropped ->
+				// the reg-file recurrence is severed (LANE32 -> UNDEF).  Keep the store for
+				// marked LCVRs so the recurrence threads via the register the body writes.
+				// Mirrors WMP_LOOPAWARE_DCE.  Inert unless the env is set AND the set is
+				// non-empty (only the wmpdevrit lift populates wmp_loopcarried_vrs).
+				static const bool wmp_lc_sr =
+					std::getenv( "WMP_LOOPAWARE_SYMREWRITE" ) != nullptr;
+				const bool wmp_keep = wmp_lc_sr && k.is_virtual() &&
+					wmp_loopcarried_vrs.count( (std::uint64_t) k.local_id );
+				if ( wmp_keep && std::getenv( "WMP_LCVR_DBG" ) )
+					fprintf( stderr, "[lcvr-symrw] keep store VR id=0x%llx\n",
+						(unsigned long long) k.local_id );
+				if ( !wmp_keep &&
+					 !aux::is_used( { std::prev( limit ), k }, false, nullptr ) )
 					continue;
 				
 				// Try minimizing expression size.
@@ -205,6 +242,30 @@ namespace vtil::optimizer
 				operand base, offset, value;
 				if ( auto displacement = ( k - symbolic::CTX[ REG_SP ] ) )
 				{
+					// WMP_BAKEWATCH: report a $sp memory cell folded to a CONSTANT --
+					// the suspected locus of ex02's v0/v1 operand-stack carrier bake
+					// (the reg-file lane is symbolic but block-INDEP => it loads a baked
+					// $sp cell; UPDATE 266).
+					if ( std::getenv( "WMP_BAKEWATCH" ) && v->is_constant() )
+						fprintf( stderr,
+							"[bakewatch] symrw $sp+0x%llx -> const 0x%llx (sz=%d)\n",
+							(unsigned long long) (intptr_t) *displacement,
+							(unsigned long long) v->get<std::uint64_t>().value_or( 0 ),
+							(int) v.size() );
+					// WMP_SYMRW_KEEPMEM (gated, default-OFF): for a lift-marked loop-carried
+					// stackslot whose symbolic re-emission folded to a CONSTANT, SKIP the
+					// constant store so the cell keeps the original (symbolic) MEMORY value
+					// instead of the baked trace round-constant (UPDATE 267/271).  EXPERIMENT:
+					// tests whether the operand-stack v0/v1 carrier stays block-connected.
+					if ( std::getenv( "WMP_SYMRW_KEEPMEM" ) && v->is_constant() &&
+					     wmp_loopcarried_stackslots.count( (std::int64_t) *displacement ) )
+					{
+						if ( std::getenv( "WMP_BAKEWATCH" ) )
+							fprintf( stderr,
+								"[bakewatch] symrw KEEPMEM skip $sp+0x%llx\n",
+								(unsigned long long) (intptr_t) *displacement );
+						continue;
+					}
 					// Buffer a str $sp, c, value.
 					//
 					instruction_buffer.emplace_back(

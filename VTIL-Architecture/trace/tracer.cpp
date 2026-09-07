@@ -30,6 +30,15 @@
 #include "../vm/lambda.hpp"
 #include <vtil/utility>
 #include <unordered_map>
+#include <set>
+#include <cstdio>
+#include <cstdlib>
+
+// WMP: loop-carried virtual-register local_ids marked by the wmpdevrit lift (defined in
+// VTIL-Compiler mov_propagation_pass.cpp; resolved at the final wmpdevrit link).  Used to
+// keep a read of a loop-carried VR branch-dependent even OUTSIDE the loop (POST-loop), so
+// the recurrence resolves to its loop-EXIT value instead of folding to the pre-loop def.
+namespace vtil::optimizer { extern std::set<std::uint64_t> wmp_loopcarried_vrs; }
 
 namespace vtil
 {
@@ -330,6 +339,34 @@ namespace vtil
 		//
 		auto result = tracer->trace( lookup );
 
+		// WMP_LOOPAWARE_RTRACE (HOISTED, gated default-off): a read of a lift-marked
+		// loop-carried virtual register must stay branch-dependent EVEN IF the within-
+		// block trace() above already resolved it to a def.  The pre-loop init and the
+		// loop body share one VTIL block (self-loop), so a header read would fold to the
+		// pre-loop def here and escape the is_unknown() guard below -> the loop-carried
+		// value is lost.  Returning it branch-dependent makes it lower to `mov tmp, VR`
+		// so the value threads via the physical register the loop body writes.
+		{
+			static const bool wmp_loopaware_rtrace_hoist =
+				std::getenv( "WMP_LOOPAWARE_RTRACE" ) != nullptr;
+			if ( wmp_loopaware_rtrace_hoist && lookup.is_register() &&
+				 lookup.reg().is_virtual() && std::getenv( "WMP_LCVR_DBG" ) )
+				fprintf( stderr, "[lcvr-hoist] id=0x%llx set_sz=%zu hit=%d\n",
+					(unsigned long long) lookup.reg().local_id,
+					optimizer::wmp_loopcarried_vrs.size(),
+					(int) optimizer::wmp_loopcarried_vrs.count(
+						(std::uint64_t) lookup.reg().local_id ) );
+			if ( wmp_loopaware_rtrace_hoist && lookup.is_register() &&
+				 lookup.reg().is_virtual() &&
+				 optimizer::wmp_loopcarried_vrs.count(
+					 (std::uint64_t) lookup.reg().local_id ) )
+			{
+				symbolic::variable bd = lookup;
+				bd.is_branch_dependant = true;
+				return bd.to_expression( false ).simplify();   // WMP: false=preserve is_branch_dependant (variable.cpp unpack path drops it)
+			}
+		}
+
 		// If result has any variables:
 		//
 		if ( result->value.is_unknown() )
@@ -360,13 +397,28 @@ namespace vtil
 				// register-side wmp_loopcarried_vrs guard.
 				static const bool wmp_loopaware_rtrace =
 					std::getenv( "WMP_LOOPAWARE_RTRACE" ) != nullptr;
-				if ( wmp_loopaware_rtrace && potential_loop &&
-					 ( lookup.is_memory() ||
-					   ( lookup.is_register() && lookup.reg().is_virtual() ) ) )
+				// WMP loop-carried VR: a read of a lift-marked loop-carried virtual
+				// register stays branch-dependent even when the current block is NOT a
+				// loop (a POST-loop read), so it resolves to the loop-EXIT recurrence
+				// value rather than folding to the dominating pre-loop def.  In-loop
+				// mem/virtual reads keep the original potential_loop behaviour.
+				const bool wmp_lc_vr =
+					lookup.is_register() && lookup.reg().is_virtual() &&
+					optimizer::wmp_loopcarried_vrs.count(
+						(std::uint64_t) lookup.reg().local_id );
+				if ( wmp_lc_vr && std::getenv( "WMP_LCVR_DBG" ) )
+					fprintf( stderr, "[lcvr-trace] id=0x%llx potloop=%d\n",
+						(unsigned long long) lookup.reg().local_id,
+						(int) potential_loop );
+				if ( wmp_loopaware_rtrace &&
+					 ( ( potential_loop &&
+						 ( lookup.is_memory() ||
+						   ( lookup.is_register() && lookup.reg().is_virtual() ) ) )
+					   || wmp_lc_vr ) )
 				{
 					symbolic::variable bd = lookup;
 					bd.is_branch_dependant = true;
-					return bd.to_expression().simplify();
+					return bd.to_expression( false ).simplify();   // WMP: false=preserve is_branch_dependant (variable.cpp unpack path drops it)
 				}
 
 				// If block does not touch our variable, skip the logic.

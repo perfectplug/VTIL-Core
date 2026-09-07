@@ -28,6 +28,7 @@
 #include "register_renaming_pass.hpp"
 #include <vtil/symex>
 #include <algorithm>
+#include <cstdlib>
 #include "../common/auxiliaries.hpp"
 
 namespace vtil::optimizer
@@ -36,6 +37,11 @@ namespace vtil::optimizer
 	//
 	size_t register_renaming_pass::pass( basic_block* blk, bool xblock )
 	{
+		// WMP_SKIP_RENAMING (gated diagnostic, default off): skip register
+		// renaming entirely to bisect which apply_all pass collapses a lift-marked
+		// loop-carried branch-dependent read.  Default off -> byte-identical.
+		if ( std::getenv( "WMP_SKIP_RENAMING" ) )
+			return 0;
 		size_t cnt = 0;
 		cached_tracer tracer = {};
 

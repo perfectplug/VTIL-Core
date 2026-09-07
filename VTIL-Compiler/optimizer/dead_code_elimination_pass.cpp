@@ -28,6 +28,8 @@
 #include "dead_code_elimination_pass.hpp"
 #include <vtil/utility>
 #include "../common/auxiliaries.hpp"
+#include "mov_propagation_pass.hpp"   // WMP: vtil::optimizer::wmp_loopcarried_vrs
+#include <cstdlib>
 
 namespace vtil::optimizer
 {
@@ -86,6 +88,24 @@ namespace vtil::optimizer
 					else
 						used = aux::is_used( { it, {  ptr, it->access_size() } }, xblock, &ctrace );
 				}
+			}
+
+			// WMP_LOOPAWARE_DCE (opt-in, default off -> byte-identical): never nop a
+			// write to a lift-marked loop-carried virtual register.  Its cross-loop use
+			// may not survive is_used after other passes fold the loop-header read, and
+			// removing the store severs the recurrence (reg-file analog of the stack
+			// WMP_CANON_VOL non-DCE).  Only affects VRs the lift explicitly marked.
+			if ( !used )
+			{
+				static const bool wmp_loopaware_dce =
+					std::getenv( "WMP_LOOPAWARE_DCE" ) != nullptr;
+				if ( wmp_loopaware_dce && !wmp_loopcarried_vrs.empty() )
+					for ( auto [op, type] : it->enum_operands() )
+						if ( type >= operand_type::write && op.is_register() &&
+							 op.reg().is_virtual() &&
+							 wmp_loopcarried_vrs.count(
+								 (std::uint64_t) op.reg().local_id ) )
+						{ used = true; break; }
 			}
 
 			// If result is not used, nop it.
