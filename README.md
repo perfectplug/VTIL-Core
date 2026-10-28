@@ -19,6 +19,10 @@
   </p>
 </p>
 
+> **Fork note:** this is not upstream VTIL — it carries wmpdevrit-specific, default-off loop-aware
+> patches. See [`FORK.md`](FORK.md) for the divergence, the `WMP_*` environment-variable surface, and
+> the loop-carried-allowlist contract. The text below is upstream's.
+
 # Introduction
 
 ## 1) What is VTIL?
