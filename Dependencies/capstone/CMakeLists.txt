@@ -10,7 +10,10 @@ set(BUILD_LIBS_ONLY ON CACHE BOOL "")
 message(STATUS "Fetching capstone (this might take a while)...")
 FetchContent_Declare(
     capstone
-    GIT_REPOSITORY https://github.com/aquynh/capstone
+    # capstone-engine/capstone is the maintained home; aquynh/capstone is the
+    # original author's now-inactive mirror. Same commit, so the fetched source is
+    # byte-identical — this only de-risks the dead remote.
+    GIT_REPOSITORY https://github.com/capstone-engine/capstone
     GIT_TAG        52c66920fc7bfa15fd9626dfd9f646c698aaa99b
     GIT_SHALLOW    false
 )

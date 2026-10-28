@@ -10,6 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-2022, ubuntu-24.04, macos-14]
+        # Build both configs: the fork's .vcxproj toolset bump and the WMP guards
+        # are Debug-relevant, and upstream only ever built Release in CI.
+        build_type: [Release, Debug]
         include:
           - os: windows-2022
             build_parallel: 4
@@ -17,8 +21,6 @@ jobs:
             build_parallel: 2
           - os: macos-14
             build_parallel: 2
-    env:
-      BUILD_TYPE: Release
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -43,10 +45,22 @@ jobs:
 
     - name: Build
       run: |
-        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DVTIL_BUILD_TESTS=ON -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
-        cmake --build build --config ${{ env.BUILD_TYPE }} --parallel ${{ matrix.build_parallel }} --verbose
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DVTIL_BUILD_TESTS=ON -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+        cmake --build build --config ${{ matrix.build_type }} --parallel ${{ matrix.build_parallel }} --verbose
 
-    - name: Test
+    - name: Test (default / upstream path)
       run: |
         ctest --version
-        ctest --test-dir build -C ${{ env.BUILD_TYPE }} --output-on-failure --verbose
+        ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure --verbose
+
+    # Exercise the fork's loop-aware optimizer guards (default-off in the run
+    # above). The WMP tests branch on these env vars; with them set, the
+    # gated-on path of VTIL-Tests/wmp_loopaware.cpp is covered. Other tests are
+    # unaffected because the loop-carried allowlists are empty outside that test.
+    - name: Test (WMP loop-aware guards enabled)
+      run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+      env:
+        WMP_LOOPAWARE_DCE: '1'
+        WMP_LOOPAWARE_MOV: '1'
+        WMP_LOOPAWARE_STACK: '1'
+        WMP_LOOPAWARE_SYMREWRITE: '1'
