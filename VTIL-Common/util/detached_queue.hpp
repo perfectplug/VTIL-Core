@@ -157,7 +157,7 @@ namespace vtil
 
 			k->prev = tail;
 			k->next = nullptr;
-			if ( tail ) tail->next = k;
+			if ( tail && tail != key::invalid_value ) tail->next = k;
 			if ( !head ) head = k;
 			tail = k;
 			list_size++;
@@ -168,6 +168,18 @@ namespace vtil
 		void erase( key* k )
 		{
 			std::lock_guard _g( *this );
+
+			// A validly linked key has prev == nullptr (it is the head) or a real
+			// node; prev == invalid_value marks a key that is NOT in the list
+			// (default-constructed, or already erased -- erase sets prev to
+			// invalid_value below). Erasing such a key must be a no-op: otherwise
+			// the boundary writes below set head/tail = k->next / k->prev (here
+			// invalid_value), corrupting the list, and list_size is decremented
+			// for a node that was never counted -- which later trips the cache's
+			// load-factor assertion. (libstdc++'s map iteration order reaches this
+			// double/stale erase where MSVC's did not, so it only bit on Linux.)
+			if ( k->prev == key::invalid_value )
+				return;
 
 			if ( k->prev && k->prev != key::invalid_value) k->prev->next = k->next;
 			else head = k->next;
