@@ -40,8 +40,20 @@
 #ifndef VTIL_SYMEX_SELFGEN_SIGMATCH_DEPTH_LIM
 	#define	VTIL_SYMEX_SELFGEN_SIGMATCH_DEPTH_LIM   3
 #endif
+// Raised from 0x10000 to 0x40000. The LRU prune (simplifier_state::init_entry ->
+// erase -> map.erase(value->iterator<cache_map>())) is NOT reentrancy-safe: once
+// the cache fills and eviction kicks in during a deeply recursive simplify, it
+// can map.erase through a stale type-erased node iterator (the libstdc++ hack
+// this file already warns about, ref issue #41) and dereference a freed node ->
+// use-after-free / SIGSEGV. A complex expression (e.g. VMProtect MATCC branch
+// materialization) overflows the old 0x10000 cache and trips it; a larger cache
+// keeps such a simplify below the eviction threshold. Enlarging a memoization
+// cache never changes results -- a hit returns the same value a miss would
+// recompute -- so this is correctness-preserving (costs ~2MB of buckets per
+// task-local state). Override with -DVTIL_SYMEX_LRU_CACHE_SIZE for heavier inputs;
+// the proper fix is to make the prune's eviction reentrancy-safe.
 #ifndef VTIL_SYMEX_LRU_CACHE_SIZE
-	#define VTIL_SYMEX_LRU_CACHE_SIZE               0x10000
+	#define VTIL_SYMEX_LRU_CACHE_SIZE               0x40000
 #endif
 #ifndef VTIL_SYMEX_LRU_PRUNE_COEFF
 	#define VTIL_SYMEX_LRU_PRUNE_COEFF              0.35
