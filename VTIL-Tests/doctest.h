@@ -356,7 +356,15 @@ DOCTEST_MSVC_SUPPRESS_WARNING(26812) // Prefer 'enum class' over 'enum'
 #ifndef DOCTEST_BREAK_INTO_DEBUGGER
 // should probably take a look at https://github.com/scottt/debugbreak
 #ifdef DOCTEST_PLATFORM_MAC
+// The original `__asm__("int $3")` is x86-only and fails to assemble on Apple
+// Silicon (arm64) with "unrecognized instruction mnemonic", breaking the whole
+// macos-14 build. Prefer clang's architecture-portable trap builtin (AppleClang
+// always has it, on both x86_64 and arm64); this is what upstream doctest adopted.
+#if defined(__has_builtin) && __has_builtin(__builtin_debugtrap)
+#define DOCTEST_BREAK_INTO_DEBUGGER() __builtin_debugtrap()
+#else
 #define DOCTEST_BREAK_INTO_DEBUGGER() __asm__("int $3\n" : :)
+#endif
 #elif DOCTEST_MSVC
 #define DOCTEST_BREAK_INTO_DEBUGGER() __debugbreak()
 #elif defined(__MINGW32__)
