@@ -40,20 +40,16 @@
 #ifndef VTIL_SYMEX_SELFGEN_SIGMATCH_DEPTH_LIM
 	#define	VTIL_SYMEX_SELFGEN_SIGMATCH_DEPTH_LIM   3
 #endif
-// Raised from 0x10000 to 0x40000. The LRU prune (simplifier_state::init_entry ->
-// erase -> map.erase(value->iterator<cache_map>())) is NOT reentrancy-safe: once
-// the cache fills and eviction kicks in during a deeply recursive simplify, it
-// can map.erase through a stale type-erased node iterator (the libstdc++ hack
-// this file already warns about, ref issue #41) and dereference a freed node ->
-// use-after-free / SIGSEGV. A complex expression (e.g. VMProtect MATCC branch
-// materialization) overflows the old 0x10000 cache and trips it; a larger cache
-// keeps such a simplify below the eviction threshold. Enlarging a memoization
-// cache never changes results -- a hit returns the same value a miss would
-// recompute -- so this is correctness-preserving (costs ~2MB of buckets per
-// task-local state). Override with -DVTIL_SYMEX_LRU_CACHE_SIZE for heavier inputs;
-// the proper fix is to make the prune's eviction reentrancy-safe.
+// LRU cache capacity. This was temporarily raised to 0x40000 to dodge a
+// use-after-free that the LRU prune tripped once the cache filled during a deep
+// recursive simplify; the real cause has since been fixed (the signature scanner
+// could return the just-inserted entry as its own partial match, double-linking
+// one key into the LRU queue -- see lookup()'s self-match guard), so this is back
+// to the original 0x10000. Override with -DVTIL_SYMEX_LRU_CACHE_SIZE for heavier
+// inputs; a larger cache only trades memory for fewer recomputations and never
+// changes results (a hit returns exactly what a miss would recompute).
 #ifndef VTIL_SYMEX_LRU_CACHE_SIZE
-	#define VTIL_SYMEX_LRU_CACHE_SIZE               0x40000
+	#define VTIL_SYMEX_LRU_CACHE_SIZE               0x10000
 #endif
 #ifndef VTIL_SYMEX_LRU_PRUNE_COEFF
 	#define VTIL_SYMEX_LRU_PRUNE_COEFF              0.35
@@ -374,7 +370,23 @@ namespace vtil::symbolic
 			{
 				// If there is a partial match:
 				//
-				if ( auto base = sig_search.match )
+				// Reject a self-match: the signature scanner must never hand back
+				// the entry this very lookup just inserted (an expression is not a
+				// pre-existing partial match of itself). If it does and we take this
+				// branch, the reprioritize path below does
+				// lru_queue.emplace_front( &it->lru_key ) and then the tail insert
+				// at the end of lookup() does lru_queue.emplace_back on the SAME
+				// key -- linking one key into the intrusive queue twice. That
+				// desyncs head/tail (head stops having prev == null), and a later
+				// prune frees the now-dangling head node: a heap-use-after-free that
+				// SIGSEGVs deep in a recursive simplify (reproducible on
+				// Linux/libstdc++ via wmpdevrit's --vmp2/AUTOBR lift of a VMProtect
+				// MATCC branch, e.g. max_i32). Short of the crash it is also silently
+				// wrong -- the self-matched fresh entry is returned as a cached
+				// "cannot simplify", so the expression is never actually simplified.
+				// Treat a self-match as no match and fall through to normal init.
+				//
+				if ( auto base = sig_search.match; base && base != &it->second )
 				{
 					// Reset inserted flag.
 					//
